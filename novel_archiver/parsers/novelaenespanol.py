@@ -516,20 +516,60 @@ class NovelaEnEspanolParser(SiteParser):
         if not text:
             return ""
 
-        text = re.sub(r"&nbsp;?", " ", text, flags=re.I)
+        text = self._repair_broken_nbsp_text(text)
+        text = self._repair_displaced_completion_phrase(text)
+
+        text = re.sub(r"\bcompletame(?!nte\b)\s*(?:sp;)?\s*(?=[A-ZÁÉÍÓÚÜÑ¿¡])", "completamente. ", text, flags=re.I)
+        text = re.sub(r"\bcompletame(?!nte\b)\s*(?:sp;)?\s*", "completamente ", text, flags=re.I)
+        text = re.sub(r"(?<![A-Za-zÁÉÍÓÚÜÑáéíóúüñ])sp;(?=[A-ZÁÉÍÓÚÜÑ¿¡])", ". ", text)
+        text = re.sub(r"(?<![A-Za-zÁÉÍÓÚÜÑáéíóúüñ])sp;(?![A-Za-zÁÉÍÓÚÜÑáéíóúüñ])", " ", text, flags=re.I)
+        text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+        text = re.sub(r"([.!?])\s*([A-ZÁÉÍÓÚÜÑ¿¡])", r"\1 \2", text)
+        return normalize_text(text)
+
+    def _repair_broken_nbsp_text(self, text: str) -> str:
+        text = re.sub(r"&nbsp(?:;|\b)", " ", text, flags=re.I)
 
         def _repair_broken_nbsp(match: re.Match[str]) -> str:
             word = match.group(1).strip()
-            if word.lower().startswith("orprendido"):
-                word = "S" + word
-            return f" {word} "
+            tail = ""
+            split = re.match(r"^([a-záéíóúüñ]+)([A-ZÁÉÍÓÚÜÑ].*)$", word)
+            if split:
+                word = split.group(1)
+                tail = split.group(2)
+            repaired = self._repair_common_broken_word(word)
+            return f" {repaired} {tail} "
 
-        text = re.sub(r"&nbs([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+);", _repair_broken_nbsp, text, flags=re.I)
+        text = re.sub(
+            r"&nbs([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+);?",
+            _repair_broken_nbsp,
+            text,
+            flags=re.I,
+        )
         text = re.sub(r"&nbs(?=\S)", " ", text, flags=re.I)
-        text = re.sub(r"(?<![A-Za-zÁÉÍÓÚÜÑáéíóúüñ])sp;(?=[A-ZÁÉÍÓÚÜÑ¿¡])", " ", text)
-        text = re.sub(r"(?<![A-Za-zÁÉÍÓÚÜÑáéíóúüñ])sp;(?![A-Za-zÁÉÍÓÚÜÑáéíóúüñ])", " ", text, flags=re.I)
-        text = re.sub(r"\s+([,.;:!?])", r"\1", text)
-        return normalize_text(text)
+        return text
+
+    def _repair_common_broken_word(self, word: str) -> str:
+        lower = word.lower()
+        if lower == "orprendido":
+            return "Sorprendido" if word[:1].isupper() else "sorprendido"
+        return word
+
+    def _repair_displaced_completion_phrase(self, text: str) -> str:
+        def _replace(match: re.Match[str]) -> str:
+            intro = match.group("intro")
+            descriptor = self._repair_common_broken_word(match.group("descriptor"))
+            subject = normalize_text(match.group("subject"))
+            return f"{intro}{subject} estaba completamente {descriptor.lower()}. "
+
+        return re.sub(
+            r"(?P<intro>(?:[¿¡]?[^.!?\n]{1,90}[?!]\s*){1,3})"
+            r"(?P<descriptor>[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,40})\s+"
+            r"(?P<subject>[A-ZÁÉÍÓÚÜÑ][^.!?\n]{1,140}?)\s+estaba\s+completame\s*(?:sp;)?\s*(?=[A-ZÁÉÍÓÚÜÑ¿¡])",
+            _replace,
+            text,
+            flags=re.I,
+        )
 
     def _is_internal_notice(self, lower_text: str) -> bool:
         return any(marker in lower_text for marker in INTERNAL_NOTICE_MARKERS)
