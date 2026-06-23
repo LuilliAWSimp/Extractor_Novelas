@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Novel Archiver</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #111827; color: #f3f4f6; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    .grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 20px; }
+    .card { background: #1f2937; border: 1px solid #374151; border-radius: 14px; padding: 18px; }
+    h1, h2, h3 { margin-top: 0; }
+    label { display: block; font-size: 14px; margin-bottom: 6px; color: #d1d5db; }
+    input, select { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 10px; border: 1px solid #4b5563; background: #111827; color: #f9fafb; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .checks { display: flex; gap: 14px; flex-wrap: wrap; }
+    .check { display: flex; align-items: center; gap: 8px; }
+    .check input { width: auto; }
+    button { border: 0; border-radius: 10px; padding: 12px 16px; cursor: pointer; font-weight: 700; }
+    .primary { background: #2563eb; color: white; }
+    .secondary { background: #374151; color: white; }
+    .bar { width: 100%; background: #111827; border: 1px solid #374151; border-radius: 999px; overflow: hidden; height: 18px; }
+    .bar > div { height: 100%; background: #22c55e; width: 0%; transition: width .25s ease; }
+    pre { background: #0b1220; padding: 14px; border-radius: 10px; overflow: auto; height: 320px; max-height: 320px; margin: 0; white-space: pre-wrap; word-break: break-word; box-sizing: border-box; }
+    .logs-shell { background: #0b1220; border-radius: 10px; border: 1px solid #1e293b; overflow: hidden; }
+    ul { padding-left: 18px; }
+    .muted { color: #9ca3af; }
+    .actions { display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Novel Archiver Local</h1>
+    <p class="muted">Interfaz local para lanzar la descarga, ver el progreso, revisar el motivo de parada y abrir la carpeta de salida.</p>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Configuración</h2>
+        <form id="job-form">
+          <label>URL base de la novela</label>
+          <input name="url" placeholder="https://..." required>
+
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label>Parser</label>
+              <select name="parser">
+                <option value="novelaenespanol">novelaenespanol</option>
+                <option value="nova">nova</option>
+                <option value="generic">generic</option>
+              </select>
+            </div>
+            <div>
+              <label>Seed URL opcional</label>
+              <input name="seed_url" placeholder="https://.../capitulo-214/">
+            </div>
+          </div>
+
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label>Capítulo inicial</label>
+              <input name="start" placeholder="214">
+            </div>
+            <div>
+              <label>Capítulo final</label>
+              <input name="end" placeholder="482">
+            </div>
+          </div>
+
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label>Delay</label>
+              <input name="delay" value="1.0">
+            </div>
+            <div>
+              <label>Timeout</label>
+              <input name="timeout" value="20">
+            </div>
+          </div>
+
+          <div class="row" style="margin-top:12px;">
+            <div>
+              <label>Reintentos</label>
+              <input name="retries" value="3">
+            </div>
+            <div>
+              <label>Carpeta de salida</label>
+              <input name="output" value="novels_output">
+            </div>
+          </div>
+
+          <div style="margin-top:12px;">
+            <label>Nombre de salida opcional</label>
+            <input name="output_name" placeholder="Ej. LOTM Vol 02 - Caps 214-482">
+            <p class="muted" style="margin:6px 0 0 0; font-size:13px;">Controla el nombre de la carpeta creada y de los archivos exportados. Si lo dejas vacío, se usa el título detectado de la novela.</p>
+          </div>
+
+          <div style="margin-top:16px;">
+            <label>Formatos</label>
+            <div class="checks">
+              <label class="check"><input type="checkbox" name="formats" value="epub" checked> EPUB</label>
+              <label class="check"><input type="checkbox" name="formats" value="txt" checked> TXT</label>
+              <label class="check"><input type="checkbox" name="formats" value="pdf"> PDF</label>
+            </div>
+          </div>
+
+          <div style="margin-top:16px;">
+            <label>Opciones</label>
+            <div class="checks">
+              <label class="check"><input type="checkbox" name="debug_crawl"> Debug crawl</label>
+              <label class="check"><input type="checkbox" name="fail_incomplete" checked> Fail incomplete</label>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button class="primary" type="submit">Iniciar descarga</button>
+            <button class="secondary" type="button" id="open-output">Abrir carpeta de salida</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Estado</h2>
+        <p><strong>Fase:</strong> <span id="stage">Sin iniciar</span></p>
+        <p><strong>Mensaje:</strong> <span id="message">—</span></p>
+        <p><strong>Título:</strong> <span id="title">—</span></p>
+        <div class="bar"><div id="bar-fill"></div></div>
+        <p id="progress-text" class="muted">0 / 0</p>
+        <div id="validation"></div>
+        <div id="diagnostics"></div>
+        <h3>Archivos generados</h3>
+        <ul id="exports"><li class="muted">Aún no hay resultados</li></ul>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:20px;">
+      <h2>Logs</h2>
+      <div class="logs-shell"><pre id="logs">Esperando ejecución...</pre></div>
+    </div>
+  </div>
+
+  <script>
+    let currentJobId = null;
+    let pollTimer = null;
+
+    function formDataToPayload(form) {
+      const fd = new FormData(form);
+      const payload = {};
+      for (const [key, value] of fd.entries()) {
+        if (key === 'formats') {
+          payload.formats = payload.formats || [];
+          payload.formats.push(value);
+        } else if (payload[key] !== undefined) {
+          if (!Array.isArray(payload[key])) payload[key] = [payload[key]];
+          payload[key].push(value);
+        } else {
+          payload[key] = value;
+        }
+      }
+      for (const checkbox of form.querySelectorAll('input[type="checkbox"]')) {
+        if (checkbox.name !== 'formats') {
+          payload[checkbox.name] = checkbox.checked;
+        }
+      }
+      return payload;
+    }
+
+    async function startJob(event) {
+      event.preventDefault();
+      const payload = formDataToPayload(document.getElementById('job-form'));
+      const res = await fetch('/api/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      currentJobId = data.job_id;
+      document.getElementById('logs').textContent = 'Trabajo enviado...';
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(fetchStatus, 1200);
+      fetchStatus();
+    }
+
+    async function fetchStatus() {
+      if (!currentJobId) return;
+      const res = await fetch(`/api/status/${currentJobId}`);
+      const data = await res.json();
+      document.getElementById('stage').textContent = data.stage || '—';
+      document.getElementById('message').textContent = data.error || data.message || '—';
+      document.getElementById('title').textContent = data.title || '—';
+      const total = data.progress_total || 0;
+      const current = data.progress_current || 0;
+      document.getElementById('progress-text').textContent = `${current} / ${total}`;
+      document.getElementById('bar-fill').style.width = total ? `${Math.min(100, (current / total) * 100)}%` : '0%';
+      const logsEl = document.getElementById('logs');
+      const wasNearBottom = (logsEl.scrollTop + logsEl.clientHeight) >= (logsEl.scrollHeight - 24);
+      logsEl.textContent = (data.logs || []).join('\n') || 'Sin logs todavía';
+      if (wasNearBottom || data.status === 'done' || data.status === 'error') {
+        logsEl.scrollTop = logsEl.scrollHeight;
+      }
+
+      const exports = document.getElementById('exports');
+      exports.innerHTML = '';
+      if (data.exports && data.exports.length) {
+        for (const item of data.exports) {
+          const li = document.createElement('li');
+          li.textContent = item;
+          exports.appendChild(li);
+        }
+      } else {
+        exports.innerHTML = '<li class="muted">Aún no hay resultados</li>';
+      }
+
+      const validation = document.getElementById('validation');
+      if (data.validation) {
+        validation.innerHTML = `<h3>Validación</h3><p>Esperado: ${data.validation.expected_start ?? '—'} → ${data.validation.expected_end ?? '—'} | Real: ${data.validation.actual_start ?? '—'} → ${data.validation.actual_end ?? '—'} | Capítulos: ${data.validation.actual_count}</p>${data.validation.reason ? `<p><strong>${data.validation.reason}</strong></p>` : ''}`;
+      } else {
+        validation.innerHTML = '';
+      }
+
+      const diagnostics = document.getElementById('diagnostics');
+      if (data.diagnostics && (data.diagnostics.stop_reason || data.diagnostics.stop_detail)) {
+        diagnostics.innerHTML = `<h3>Motivo de parada</h3><p><strong>${data.diagnostics.stop_reason || '—'}</strong></p><p>${data.diagnostics.stop_detail || ''}</p>`;
+      } else {
+        diagnostics.innerHTML = '';
+      }
+
+      if (data.status === 'done' || data.status === 'error') {
+        clearInterval(pollTimer);
+      }
+    }
+
+    async function openOutput() {
+      if (!currentJobId) return;
+      await fetch(`/api/open-output/${currentJobId}`, { method: 'POST' });
+    }
+
+    document.getElementById('job-form').addEventListener('submit', startJob);
+    document.getElementById('open-output').addEventListener('click', openOutput);
+  </script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "title_selector": "h1.entry-title",
+  "description_selector": ".series-summary",
+  "chapter_link_selector": ".chapter-list a",
+  "chapter_title_pattern": "cap[ií]tulo\\s+(\\d+(?:\\.\\d+)?)\\s*[:\\-]?\\s*(.+)?",
+  "chapter_content_selector": "article .entry-content",
+  "skip_selectors": [".share-buttons", ".comments", ".adsbygoogle", "script", "style"]
+}
