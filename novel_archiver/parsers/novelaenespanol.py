@@ -33,6 +33,15 @@ STOP_MARKERS = (
     "seleccione una novela",
     "paginas",
 )
+INTERNAL_NOTICE_MARKERS = (
+    "encontró un capítulo o texto faltante",
+    "encontro un capitulo o texto faltante",
+    "texto faltante - infórmelo",
+    "texto faltante - informelo",
+    "puedes mejorar el texto con el editor",
+)
+SEPARATOR_BLOCKS = {"***", "* * *"}
+
 SKIP_PREFIXES = (
     "hogar",
     "todos los capítulos",
@@ -458,12 +467,27 @@ class NovelaEnEspanolParser(SiteParser):
             for element in article.select(selector):
                 element.decompose()
 
-        blocks = extract_text_blocks(article)
+        raw_blocks = extract_text_blocks(article)
+        blocks = [self._clean_chapter_block(block) for block in raw_blocks]
+        blocks = [block for block in blocks if block]
         filtered: list[str] = []
         found_body = False
 
-        for block in blocks:
+        for index, block in enumerate(blocks):
             lower = block.lower()
+
+            if self._is_internal_notice(lower):
+                if filtered and self._is_separator_block(filtered[-1]):
+                    filtered.pop()
+                continue
+
+            if self._is_separator_block(block):
+                prev_notice = index > 0 and self._is_internal_notice(blocks[index - 1].lower())
+                next_notice = index + 1 < len(blocks) and self._is_internal_notice(blocks[index + 1].lower())
+                if prev_notice or next_notice:
+                    continue
+                filtered.append("* * *")
+                continue
 
             if any(marker in lower for marker in STOP_MARKERS):
                 break
@@ -476,11 +500,9 @@ class NovelaEnEspanolParser(SiteParser):
                     continue
                 found_body = True
 
-            if block in {"***", "* * *"}:
-                filtered.append("* * *")
-                continue
-
             filtered.append(block)
+
+        filtered = self._dedupe_repeated_long_blocks(filtered)
 
         page_title = self._page_chapter_title(soup)
         if page_title:
@@ -488,6 +510,62 @@ class NovelaEnEspanolParser(SiteParser):
 
         text = join_blocks(filtered)
         return ChapterContent(ref=chapter, text=text, source_url=chapter.url)
+
+    def _clean_chapter_block(self, block: str) -> str:
+        text = normalize_text(block)
+        if not text:
+            return ""
+
+        text = re.sub(r"&nbsp;?", " ", text, flags=re.I)
+
+        def _repair_broken_nbsp(match: re.Match[str]) -> str:
+            word = match.group(1).strip()
+            if word.lower().startswith("orprendido"):
+                word = "S" + word
+            return f" {word} "
+
+        text = re.sub(r"&nbs([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+);", _repair_broken_nbsp, text, flags=re.I)
+        text = re.sub(r"&nbs(?=\S)", " ", text, flags=re.I)
+        text = re.sub(r"(?<![A-Za-zÁÉÍÓÚÜÑáéíóúüñ])sp;(?=[A-ZÁÉÍÓÚÜÑ¿¡])", " ", text)
+        text = re.sub(r"(?<![A-Za-zÁÉÍÓÚÜÑáéíóúüñ])sp;(?![A-Za-zÁÉÍÓÚÜÑáéíóúüñ])", " ", text, flags=re.I)
+        text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+        return normalize_text(text)
+
+    def _is_internal_notice(self, lower_text: str) -> bool:
+        return any(marker in lower_text for marker in INTERNAL_NOTICE_MARKERS)
+
+    def _is_separator_block(self, block: str) -> bool:
+        return block.strip() in SEPARATOR_BLOCKS
+
+    def _dedupe_repeated_long_blocks(self, blocks: list[str]) -> list[str]:
+        result: list[str] = []
+        compact_blocks = [self._compact_for_dedupe(block) for block in blocks]
+
+        for index, block in enumerate(blocks):
+            compact = compact_blocks[index]
+            if len(compact) < 500 or self._is_separator_block(block):
+                result.append(block)
+                continue
+
+            repeated_chars = 0
+            repeated_count = 0
+            for later in compact_blocks[index + 1:]:
+                if len(later) < 60:
+                    continue
+                if later in compact:
+                    repeated_chars += len(later)
+                    repeated_count += 1
+
+            if repeated_count >= 3 and repeated_chars >= min(350, int(len(compact) * 0.35)):
+                continue
+
+            result.append(block)
+
+        return result
+
+    def _compact_for_dedupe(self, text: str) -> str:
+        text = normalize_text(text).lower()
+        return re.sub(r"[^0-9a-záéíóúüñ]+", "", text)
 
     def _parse_title(self, soup: BeautifulSoup) -> str | None:
         title_tag = soup.select_one("h1")
