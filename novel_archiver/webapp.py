@@ -19,6 +19,17 @@ from novel_archiver.runner import NovelArchiver
 LOGGER = logging.getLogger(__name__)
 
 
+class WerkzeugStatusFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return 'GET /api/status/' not in record.getMessage()
+
+
+def _install_werkzeug_status_filter() -> None:
+    logger = logging.getLogger('werkzeug')
+    if not any(isinstance(existing, WerkzeugStatusFilter) for existing in logger.filters):
+        logger.addFilter(WerkzeugStatusFilter())
+
+
 @dataclass
 class JobState:
     job_id: str
@@ -27,6 +38,12 @@ class JobState:
     message: str = 'Esperando inicio'
     progress_current: int = 0
     progress_total: int = 0
+    stage_code: str | None = None
+    current_chapter: float | None = None
+    current_title: str | None = None
+    current_url: str | None = None
+    current_export: str | None = None
+    item_elapsed_seconds: float | None = None
     logs: list[str] = field(default_factory=list)
     exports: list[str] = field(default_factory=list)
     output_dir: str | None = None
@@ -35,6 +52,7 @@ class JobState:
     diagnostics: dict[str, Any] | None = None
     error: str | None = None
     created_at: float = field(default_factory=time.time)
+    last_activity_at: float = field(default_factory=time.time)
     finished_at: float | None = None
 
     def append_log(self, message: str) -> None:
@@ -42,9 +60,17 @@ class JobState:
         if line:
             self.logs.append(line)
             self.logs = self.logs[-400:]
+            self.last_activity_at = time.time()
+
+    def touch(self) -> None:
+        self.last_activity_at = time.time()
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        end_time = self.finished_at or time.time()
+        data['elapsed_seconds'] = max(0.0, end_time - self.created_at)
+        data['idle_seconds'] = max(0.0, time.time() - self.last_activity_at)
+        return data
 
 
 class JobLogHandler(logging.Handler):
@@ -68,6 +94,7 @@ JOBS_LOCK = threading.Lock()
 
 
 def create_app() -> Flask:
+    _install_werkzeug_status_filter()
     app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / 'templates'))
 
     @app.get('/')
@@ -137,6 +164,13 @@ def _run_job(job: JobState, payload: dict[str, Any]) -> None:
         delay = float(payload.get('delay') or 1.0)
         retries = int(payload.get('retries') or 3)
 
+        requested_count = _estimate_requested_count(start, end)
+        if requested_count and requested_count > 50:
+            job.append_log(
+                f'[AVISO] Rango grande detectado: {requested_count} capítulos. '
+                'Para rangos grandes conviene generar primero TXT y después EPUB/PDF si el texto quedó correcto.'
+            )
+
         archiver = NovelArchiver(output_root, timeout=timeout, delay_seconds=delay, max_retries=retries)
 
         metadata, chapters, exports = archiver.run(
@@ -189,10 +223,27 @@ def _handle_progress(job: JobState, event: dict[str, Any]) -> None:
             'exporting': 'Exportando archivos',
             'done': 'Completado',
         }
-        job.stage = stage_map.get(stage, stage)
+        job.stage_code = str(stage)
+        job.stage = stage_map.get(stage, str(stage))
+    if 'current_chapter' in event:
+        job.current_chapter = event.get('current_chapter')
+    if 'current_title' in event:
+        job.current_title = event.get('current_title')
+    if 'current_url' in event:
+        job.current_url = event.get('current_url')
+    if 'current_export' in event:
+        job.current_export = event.get('current_export')
+    if 'item_elapsed_seconds' in event:
+        value = event.get('item_elapsed_seconds')
+        if isinstance(value, (int, float)):
+            job.item_elapsed_seconds = float(value)
+        elif value is None:
+            job.item_elapsed_seconds = None
     if message:
         job.message = message
         job.append_log(message)
+    else:
+        job.touch()
     current = event.get('current')
     total = event.get('total')
     if isinstance(current, int):
@@ -213,6 +264,14 @@ def _open_path(path: Path) -> None:
         subprocess.Popen(['xdg-open', target])
     except Exception:
         webbrowser.open(path.resolve().as_uri())
+
+
+def _estimate_requested_count(start: float | None, end: float | None) -> int | None:
+    if start is None or end is None or end < start:
+        return None
+    if not float(start).is_integer() or not float(end).is_integer():
+        return None
+    return int(end - start + 1)
 
 
 def _to_optional_float(value: Any) -> float | None:

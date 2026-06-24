@@ -25,6 +25,10 @@
     .logs-shell { background: #0b1220; border-radius: 10px; border: 1px solid #1e293b; overflow: hidden; }
     ul { padding-left: 18px; }
     .muted { color: #9ca3af; }
+    .warning { background: #422006; border: 1px solid #92400e; color: #fde68a; border-radius: 10px; padding: 10px 12px; margin-top: 12px; display: none; }
+    .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; font-size: 14px; }
+    .meta-grid p { margin: 0; }
+    .break-all { word-break: break-all; }
     .actions { display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
     @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
   </style>
@@ -65,6 +69,9 @@
               <label>Capítulo final</label>
               <input name="end" placeholder="482">
             </div>
+          </div>
+          <div id="large-range-warning" class="warning">
+            Rango grande detectado. Para más de 50 capítulos conviene generar primero solo TXT, revisar el resultado y después generar EPUB/PDF. PDF puede tardar bastante en rangos largos.
           </div>
 
           <div class="row" style="margin-top:12px;">
@@ -126,6 +133,17 @@
         <p><strong>Título:</strong> <span id="title">—</span></p>
         <div class="bar"><div id="bar-fill"></div></div>
         <p id="progress-text" class="muted">0 / 0</p>
+        <div class="meta-grid muted">
+          <p><strong>Fase técnica:</strong> <span id="stage-code">—</span></p>
+          <p><strong>Tiempo total:</strong> <span id="elapsed">—</span></p>
+          <p><strong>Última actividad:</strong> <span id="last-activity">—</span></p>
+          <p><strong>Inactivo:</strong> <span id="idle">—</span></p>
+          <p><strong>Capítulo actual:</strong> <span id="current-chapter">—</span></p>
+          <p><strong>Tiempo paso actual:</strong> <span id="item-elapsed">—</span></p>
+          <p style="grid-column:1 / -1;"><strong>Título actual:</strong> <span id="current-title">—</span></p>
+          <p style="grid-column:1 / -1;"><strong>URL actual:</strong> <span id="current-url" class="break-all">—</span></p>
+          <p style="grid-column:1 / -1;"><strong>Exportando:</strong> <span id="current-export">—</span></p>
+        </div>
         <div id="validation"></div>
         <div id="diagnostics"></div>
         <h3>Archivos generados</h3>
@@ -165,9 +183,48 @@
       return payload;
     }
 
+    function estimateRangeCount(payload) {
+      const start = Number(payload.start);
+      const end = Number(payload.end);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+      if (!Number.isInteger(start) || !Number.isInteger(end)) return null;
+      return Math.floor(end - start + 1);
+    }
+
+    function formatSeconds(value) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
+      const seconds = Math.max(0, Number(value));
+      if (seconds < 60) return `${seconds.toFixed(1)}s`;
+      const minutes = Math.floor(seconds / 60);
+      const rest = Math.round(seconds % 60);
+      if (minutes < 60) return `${minutes}m ${rest}s`;
+      const hours = Math.floor(minutes / 60);
+      return `${hours}h ${minutes % 60}m ${rest}s`;
+    }
+
+    function formatTime(value) {
+      if (!value) return '—';
+      return new Date(Number(value) * 1000).toLocaleTimeString();
+    }
+
+    function updateLargeRangeWarning() {
+      const payload = formDataToPayload(document.getElementById('job-form'));
+      const count = estimateRangeCount(payload);
+      document.getElementById('large-range-warning').style.display = count && count > 50 ? 'block' : 'none';
+    }
+
     async function startJob(event) {
       event.preventDefault();
       const payload = formDataToPayload(document.getElementById('job-form'));
+      const count = estimateRangeCount(payload);
+      if (count && count > 50) {
+        const formats = payload.formats || [];
+        const hasHeavyFormat = formats.includes('epub') || formats.includes('pdf');
+        const message = hasHeavyFormat
+          ? `Vas a procesar ${count} capítulos. Para rangos grandes se recomienda generar primero solo TXT y después EPUB/PDF. ¿Deseas continuar?`
+          : `Vas a procesar ${count} capítulos. ¿Deseas continuar?`;
+        if (!window.confirm(message)) return;
+      }
       const res = await fetch('/api/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -188,6 +245,15 @@
       document.getElementById('stage').textContent = data.stage || '—';
       document.getElementById('message').textContent = data.error || data.message || '—';
       document.getElementById('title').textContent = data.title || '—';
+      document.getElementById('stage-code').textContent = data.stage_code || '—';
+      document.getElementById('elapsed').textContent = formatSeconds(data.elapsed_seconds);
+      document.getElementById('last-activity').textContent = formatTime(data.last_activity_at);
+      document.getElementById('idle').textContent = formatSeconds(data.idle_seconds);
+      document.getElementById('current-chapter').textContent = data.current_chapter ?? '—';
+      document.getElementById('item-elapsed').textContent = formatSeconds(data.item_elapsed_seconds);
+      document.getElementById('current-title').textContent = data.current_title || '—';
+      document.getElementById('current-url').textContent = data.current_url || '—';
+      document.getElementById('current-export').textContent = data.current_export ? data.current_export.toUpperCase() : '—';
       const total = data.progress_total || 0;
       const current = data.progress_current || 0;
       document.getElementById('progress-text').textContent = `${current} / ${total}`;
@@ -236,7 +302,9 @@
     }
 
     document.getElementById('job-form').addEventListener('submit', startJob);
+    document.getElementById('job-form').addEventListener('input', updateLargeRangeWarning);
     document.getElementById('open-output').addEventListener('click', openOutput);
+    updateLargeRangeWarning();
   </script>
 </body>
 </html>

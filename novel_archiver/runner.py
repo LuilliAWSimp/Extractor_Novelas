@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -68,8 +69,6 @@ class NovelArchiver:
                 progress_callback({'stage': 'discovering', 'message': 'Descubriendo capítulos...'})
             metadata, chapter_refs = parser.discover(base_url)
             subset_already_applied = False
-        if output_name and str(output_name).strip():
-            metadata.extra['output_name'] = str(output_name).strip()
         if output_name and str(output_name).strip():
             metadata.extra['output_name'] = str(output_name).strip()
         return self._download_and_export(
@@ -164,18 +163,54 @@ class NovelArchiver:
 
         contents: list[ChapterContent] = []
         if progress_callback:
-            progress_callback({'stage': 'downloading', 'message': f'Descubiertos {len(selected)} capítulos para descargar.', 'current': 0, 'total': len(selected)})
+            progress_callback({
+                'stage': 'downloading',
+                'message': f'Descubiertos {len(selected)} capítulos para descargar.',
+                'current': 0,
+                'total': len(selected),
+            })
         for index, chapter in enumerate(selected, start=1):
+            chapter_started = time.monotonic()
             LOGGER.info('Descargando capítulo %s -> %s', chapter.number, chapter.url)
             if progress_callback:
-                progress_callback({'stage': 'downloading', 'message': f'Descargando capítulo {chapter.number}', 'current': index - 1, 'total': len(selected)})
+                progress_callback({
+                    'stage': 'downloading',
+                    'message': f'Descargando capítulo {chapter.number}',
+                    'current': index - 1,
+                    'total': len(selected),
+                    'current_chapter': chapter.number,
+                    'current_title': chapter.title,
+                    'current_url': chapter.url,
+                    'item_elapsed_seconds': 0.0,
+                })
             content = parser.fetch_chapter(chapter)
+            elapsed = time.monotonic() - chapter_started
             if not content.text.strip():
                 LOGGER.warning('Capítulo vacío: %s', chapter.url)
+                if progress_callback:
+                    progress_callback({
+                        'stage': 'downloading',
+                        'message': f'Capítulo {chapter.number} vacío tras {elapsed:.1f}s',
+                        'current': index,
+                        'total': len(selected),
+                        'current_chapter': chapter.number,
+                        'current_title': chapter.title,
+                        'current_url': chapter.url,
+                        'item_elapsed_seconds': elapsed,
+                    })
                 continue
             contents.append(content)
             if progress_callback:
-                progress_callback({'stage': 'downloading', 'message': f'Capítulo {chapter.number} descargado', 'current': index, 'total': len(selected)})
+                progress_callback({
+                    'stage': 'downloading',
+                    'message': f'Capítulo {chapter.number} descargado en {elapsed:.1f}s',
+                    'current': index,
+                    'total': len(selected),
+                    'current_chapter': chapter.number,
+                    'current_title': chapter.title,
+                    'current_url': chapter.url,
+                    'item_elapsed_seconds': elapsed,
+                })
         self.store.write_chapter_texts(metadata, contents)
 
         validation = self._validate_range(chapter_start, chapter_end, contents)
@@ -187,19 +222,55 @@ class NovelArchiver:
             raise RuntimeError(validation.reason or 'El rango descargado quedó incompleto')
 
         export_dir = self.store.novel_dir(metadata) / 'exports'
+        export_steps = [fmt for fmt in ('txt', 'epub', 'pdf') if fmt in export_formats]
         if progress_callback:
-            progress_callback({'stage': 'exporting', 'message': 'Exportando archivos...', 'current': len(contents), 'total': len(selected)})
+            progress_callback({
+                'stage': 'exporting',
+                'message': f'Exportando archivos ({len(export_steps)} formato(s))...',
+                'current': 0,
+                'total': len(export_steps),
+                'current_chapter': None,
+                'current_title': None,
+                'current_url': None,
+                'current_export': None,
+                'item_elapsed_seconds': 0.0,
+            })
         exports: list[Path] = []
-        if 'txt' in export_formats:
-            exports.append(export_txt(metadata, contents, export_dir).path)
-        if 'epub' in export_formats:
-            exports.append(export_epub(metadata, contents, export_dir).path)
-        if 'pdf' in export_formats:
-            result = export_pdf(metadata, contents, export_dir)
-            if result:
-                exports.append(result.path)
+        for export_index, fmt in enumerate(export_steps, start=1):
+            export_started = time.monotonic()
+            label = fmt.upper()
+            LOGGER.info('Exportando %s...', label)
+            if progress_callback:
+                progress_callback({
+                    'stage': 'exporting',
+                    'message': f'Exportando {label} ({export_index}/{len(export_steps)})...',
+                    'current': export_index - 1,
+                    'total': len(export_steps),
+                    'current_export': fmt,
+                    'item_elapsed_seconds': 0.0,
+                })
+            if fmt == 'txt':
+                exports.append(export_txt(metadata, contents, export_dir).path)
+            elif fmt == 'epub':
+                exports.append(export_epub(metadata, contents, export_dir).path)
+            elif fmt == 'pdf':
+                result = export_pdf(metadata, contents, export_dir)
+                if result:
+                    exports.append(result.path)
+                else:
+                    LOGGER.warning('PDF no generado: reportlab no está disponible')
+            elapsed = time.monotonic() - export_started
+            if progress_callback:
+                progress_callback({
+                    'stage': 'exporting',
+                    'message': f'{label} exportado en {elapsed:.1f}s',
+                    'current': export_index,
+                    'total': len(export_steps),
+                    'current_export': fmt,
+                    'item_elapsed_seconds': elapsed,
+                })
         if progress_callback:
-            progress_callback({'stage': 'done', 'message': f'Proceso completo. Archivos generados: {len(exports)}', 'current': len(contents), 'total': len(selected)})
+            progress_callback({'stage': 'done', 'message': f'Proceso completo. Archivos generados: {len(exports)}', 'current': len(export_steps), 'total': len(export_steps), 'current_export': None, 'item_elapsed_seconds': None})
         return metadata, contents, exports
 
     @staticmethod
